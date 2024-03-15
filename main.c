@@ -1,762 +1,1051 @@
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
-#define NEWGAMEBUFFER 18
+#define CARPARKSIZE 512
 
-typedef struct nodo{
-    char *word;
-    int valid;
-    struct nodo *father;
-    struct nodo *left;
-    struct nodo *right;
-    /*char *color;*/
-} nodo_t;
+/*
+typedef struct AdjListNode{
+    int distanceNextStation;
+    struct AdjListNode* leftChild;
+    struct AdjListNode* rightChild;
+    struct AdjListNode* parent;
+    int inUse;
+    char colour;
+} AdjListNode;
+ */
 
-typedef nodo_t *Ptr_nodo;
+/*typedef struct NodesPool{
+    AdjListNode* nodes;
+    int nextAvailableIndex;
+    int poolDim;
+} NodesPool;
+ */
 
-typedef struct pos_list{
-    int position;
-    struct pos_list *next;
-} pos_list_t;
+typedef struct Station {
+    int distance;
+    int carPark[CARPARKSIZE];
+    int maxAutonomy;
+    int actualCars; //numero attuale di auto
+    //int stationModified;
+    //AdjListNode* adjListHeadForwards;
+    //AdjListNode* adjListHeadBackwards;
+    //int adjListForwardsDim;
+    //int adjListBackwardsDim;
+    //int adjListForwardsCounter;
+    //int adjListBackwardsCounter;
+} Station;
 
-typedef pos_list_t *Ptr_pos_list;
+typedef struct Road {
+    int roadModified;
+    int isStationModified;
+    Station* stationList; //dovrà essere array ordinato in senso crescente, in modo da implementare ricerca binaria, rimozione elemento implica gestione ottimale chiusura buchi
+    int stationCounter;
+    int roadDim;
+} Road;
 
-typedef struct letter{
-    int belong;
-    struct pos_list *valid_pos;
-    struct pos_list *invalid_pos;
-    int min;
-    int ex;
-    int exact;
-}letter_t;
+typedef struct MarkerArray{
+    int distance;
+    int steps;
+    int predecessor;
+} MarkerArray;
 
-Ptr_pos_list distruggiLista(Ptr_pos_list l){
-    Ptr_pos_list tmp;
-
-    while(l!=NULL){
-        tmp=l;
-        l=l->next;
-        free(tmp);
+/*
+AdjListNode* newNode(int distance, NodesPool pool){   // O(n) dipende però da tempo speso da eventuale realloc
+    if(pool.nextAvailableIndex < pool.poolDim){
+        AdjListNode* node = &(pool.nodes[pool.nextAvailableIndex]);
+        int helper = pool.nextAvailableIndex++;
+        pool.nodes[pool.nextAvailableIndex].inUse = 1;
+        pool.nodes[pool.nextAvailableIndex].distanceNextStation = distance;
+        pool.nextAvailableIndex = pool.poolDim;
+        for(int i=helper;i<pool.poolDim;i++){
+            if(pool.nodes[i].inUse == 0){
+                pool.nextAvailableIndex = i;
+                break;
+            }
+        }
+        return node;
+    }else{
+        pool.poolDim = pool.poolDim * 2;
+        pool.nodes = (AdjListNode*) realloc(pool.nodes, pool.poolDim * sizeof(AdjListNode));
+        if(pool.nodes == NULL){
+            printf("Errore allocazione memoria.\n");
+            exit(EXIT_FAILURE);
+        }
+        for(int i=pool.nextAvailableIndex;i<pool.poolDim;i++){
+            pool.nodes[i].inUse = 0;
+        }
+        AdjListNode* node = &(pool.nodes[pool.nextAvailableIndex]);
+        pool.nodes[pool.nextAvailableIndex].inUse = 1;
+        pool.nextAvailableIndex++;
+        return node;
     }
-
-    return NULL;
 }
 
-Ptr_nodo BST_Insert(Ptr_nodo Tree, Ptr_nodo z){		/*Tree è di tipo Ptr_nodo */
-    Ptr_nodo y,x;
+void nodeRemoval(NodesPool pool, AdjListNode* node){     // O(n)
+    node->distanceNextStation = 0;
+    node->leftChild = NULL;
+    node->rightChild = NULL;
 
-    y=NULL;
-    x=Tree;
+    if(node >= &(pool.nodes[0]) && node <= &(pool.nodes[pool.poolDim-1])){
+        int index = node - &(pool.nodes[0]);
+        pool.nodes[index].inUse = 0;
 
-    while(x!=NULL){
-        y=x;
-        if(strcmp(z->word, x->word)<0){
-            x=x->left;
+        for(int i=0;i<pool.poolDim;i++){
+            if(pool.nodes[i].inUse == 0){
+                pool.nextAvailableIndex = i;
+                break;
+            }
+        }
+    }
+}
+
+AdjListNode* treeSearch(AdjListNode* tree, int distance){   // O[log(n)]
+    if(tree == NULL || distance == tree->distanceNextStation){
+        return tree;
+    }else if(distance < tree->distanceNextStation){
+        return treeSearch(tree->leftChild, distance);
+    }else{
+        return treeSearch(tree->rightChild, distance);
+    }
+}
+
+int searchNode(AdjListNode* tree, int distance){  // O[log(n)]
+    if(tree == NULL){
+        return 0;
+    }else if(tree->distanceNextStation == distance){
+        return 1;
+    }else if(distance < tree->distanceNextStation){
+        return searchNode(tree->leftChild, distance);
+    }else{
+        return searchNode(tree->rightChild, distance);
+    }
+}
+
+AdjListNode* treeMinimum(AdjListNode* node){   // O[log(n)]
+    while(node->leftChild != NULL){
+        node = node->leftChild;
+    }
+    return node;
+}
+
+AdjListNode* treeSuccessor(AdjListNode* node){    // O[log(n)]
+    if(node->rightChild != NULL){
+        return treeMinimum(node->rightChild);
+    }
+    AdjListNode* y = node->parent;
+    while(y != NULL && node == y->rightChild){
+        node = y;
+        y = y->parent;
+    }
+    return y;
+}
+
+void leftRotate(AdjListNode* tree, AdjListNode* node){  // O[1]
+    AdjListNode* y = node->rightChild;
+    node->rightChild = y->leftChild;
+    if(y->leftChild != NULL){
+        y->leftChild->parent = node;
+    }
+    y->parent = node->parent;
+    if(node->parent == NULL){
+        tree = y;
+    }else if(node == node->parent->leftChild){
+        node->parent->leftChild = y;
+    }else{
+        node->parent->rightChild = y;
+    }
+    y->leftChild = node;
+    node->parent = y;
+}
+
+void rightRotate(AdjListNode* tree, AdjListNode* node){ // O[1]
+    AdjListNode* y = node->leftChild;
+    node->leftChild = y->rightChild;
+    if(y->rightChild != NULL){
+        y->rightChild->parent = node;
+    }
+    y->parent = node->parent;
+    if(node->parent == NULL){
+        tree = y;
+    }else if(node == node->parent->rightChild){
+        node->parent->rightChild = y;
+    }else{
+        node->parent->leftChild = y;
+    }
+    y->rightChild = node;
+    node->parent = y;
+}
+
+void RBDeleteFixup(AdjListNode* tree, AdjListNode* node) {
+    if (node->colour == 'R' || node->parent == NULL) {
+        node->colour = 'B';
+    } else if (node == node->parent->leftChild) {
+        AdjListNode *w = node->parent->rightChild;
+        if (w->colour == 'R') {
+            w->colour = 'B';
+            node->parent->colour = 'R';
+            leftRotate(tree, node->parent);
+            w = node->parent->rightChild;
+        }
+        if (w->leftChild->colour == 'B' && w->rightChild->colour == 'B') {
+            w->colour = 'R';
+            RBDeleteFixup(tree, node->parent);
+        } else if (w->rightChild->colour == 'B') {
+            w->leftChild->colour = 'B';
+            w->colour = 'R';
+            rightRotate(tree, w);
+            w = node->parent->rightChild;
+        }
+        w->colour = node->parent->colour;
+        node->parent->colour = 'B';
+        w->rightChild->colour = 'B';
+        leftRotate(tree, node->parent);
+    } else{
+        AdjListNode *w = node->parent->leftChild;
+        if (w->colour == 'R') {
+            w->colour = 'B';
+            node->parent->colour = 'R';
+            rightRotate(tree, node->parent);
+            w = node->parent->leftChild;
+        }
+        if (w->rightChild->colour == 'B' && w->leftChild->colour == 'B') {
+            w->colour = 'R';
+            RBDeleteFixup(tree, node->parent);
+        } else if (w->leftChild->colour == 'B') {
+            w->rightChild->colour = 'B';
+            w->colour = 'R';
+            leftRotate(tree, w);
+            w = node->parent->leftChild;
+        }
+        w->colour = node->parent->colour;
+        node->parent->colour = 'B';
+        w->leftChild->colour = 'B';
+        rightRotate(tree, node->parent);
+    }
+}
+
+void RBInsertFixup(AdjListNode* tree, AdjListNode* node){   // O[log(n)]
+    if(node == tree){
+        tree->colour = 'B';
+    }else {
+        AdjListNode *x = node->parent;
+        if (x->colour == 'R') {
+            if (x == x->parent->leftChild) {
+                AdjListNode *y = x->parent->rightChild;
+                if (y->colour == 'R') {
+                    x->colour = 'B';
+                    y->colour = 'B';
+                    x->parent->colour = 'R';
+                    RBInsertFixup(tree, x->parent);
+                } else {
+                    if (node == x->rightChild) {
+                        node = x;
+                        leftRotate(tree, node);
+                        x = node->parent;
+                    }
+                    x->colour = 'B';
+                    x->parent->colour = 'R';
+                    rightRotate(tree, x->parent);
+                }
+            } else {
+                AdjListNode *y = x->parent->leftChild;
+                if (y->colour == 'R') {
+                    x->colour = 'B';
+                    y->colour = 'B';
+                    x->parent->colour = 'R';
+                    RBInsertFixup(tree, x->parent);
+                } else {
+                    if (node == x->leftChild) {
+                        node = x;
+                        rightRotate(tree, node);
+                        x = node->parent;
+                    }
+                    x->colour = 'B';
+                    x->parent->colour = 'R';
+                    leftRotate(tree, x->parent);
+                }
+            }
+        }
+    }
+}
+
+void insertNodeRedBlackTree(AdjListNode* tree, AdjListNode* node){ // O[log(n)]
+    AdjListNode* y = NULL;
+    AdjListNode* x = tree;
+    while(x != NULL){
+        y = x;
+        if(node->distanceNextStation < x->distanceNextStation){
+            x = x->leftChild;
         }else{
-            x=x->right;
+            x = x->rightChild;
         }
     }
-    z->father=y;
-    if(y==NULL){
-        Tree=z;
-    }else if(strcmp(z->word, y->word)<0){
-        y->left=z;
+    node->parent = y;
+    if(y == NULL) {
+        tree = node;
+    }else if(node->distanceNextStation < y->distanceNextStation) {
+        y->leftChild = node;
     }else{
-        y->right=z;
+        y->rightChild = node;
     }
-
-    z->left=NULL;
-    z->right=NULL;
-
-    return Tree;
+    node->leftChild = NULL;
+    node->rightChild = NULL;
+    node->colour = 'R';
+    RBInsertFixup(tree, node);
 }
 
-void Inorder_Tree_Walk_fix(Ptr_nodo x){
-    if(x!=NULL){
-        Inorder_Tree_Walk_fix(x->left);
-        if(x->valid==0){
-            x->valid=1;
+AdjListNode* removeNodeRedBlackTree(AdjListNode* tree, int distance) {  // O[log(n)]
+    AdjListNode *z = treeSearch(tree, distance);
+    AdjListNode *y;
+    AdjListNode *x;
+    if (z->leftChild == NULL || z->rightChild == NULL) {
+        y = z;
+    } else {
+        y = treeSuccessor(z);
+    }
+    if (y->leftChild != NULL) {
+        x = y->leftChild;
+    } else {
+        x = y->rightChild;
+    }
+    x->parent = y->parent;
+    if (y->parent == NULL) {
+        tree = x;
+    } else if (y == y->parent->leftChild) {
+        y->parent->leftChild = x;
+    } else {
+        y->parent->rightChild = x;
+    }
+    if (y != z) {
+        z->distanceNextStation = y->distanceNextStation;
+    }
+    if (y->colour == 'B') {
+        RBDeleteFixup(tree, x);
+    }
+    return y;
+}
+*/
+
+void bubbleSort(Station array[], int dim){  // O(n)
+    int swap = 1;
+    Station tmp;
+
+    for(int i = dim-1; i>0 && swap == 1;i--){
+        if(array[i].distance < array[i-1].distance){
+            tmp = array[i-1];
+            array[i-1] = array[i];
+            array[i] = tmp;
+        }else{
+            swap = 0;
         }
-        Inorder_Tree_Walk_fix(x->right);
     }
 }
 
-Ptr_nodo setup_list_mod(Ptr_nodo Tree, int k){
-    char *word;
-    Ptr_nodo z;
+// Funzione per leggere una parola (sequenza di caratteri non-spazio)
+char* readWord(char* buffer) {
+    char ch;
+    int length = 0;
 
-
-
-    word=malloc(sizeof(char)*(k+1));
-    if(scanf("%[^\n]%*c", word)==0){
+    // Leggi caratteri finché non incontri uno spazio o un carattere di fine riga
+    while ((ch = getc_unlocked(stdin)) != EOF && ch != ' ' && ch != '\n'){
+        buffer[length] = ch;
+        length++;
+    }
+    if(ch == EOF){
         return NULL;
     }
 
-    do{
-        z=malloc(sizeof(nodo_t));
-        if(z!=NULL){
-            z->word=malloc(sizeof(char)*(k+1));
+    // Aggiungi il terminatore di stringa '\0'
+    buffer[length] = '\0';
 
-            strcpy(z->word, word);
-            z->valid=1;
-            z->father=NULL;
-            z->left=NULL;
-            z->right=NULL;
-
-        }
-        Tree=BST_Insert(Tree, z);
-
-        if(scanf("%[^\n]%*c", word)==0){
-            return NULL;
-        }
-    }while(word[0]!='+');
-
-    free(word);
-
-    return Tree;
+    return buffer;
 }
 
-Ptr_nodo setup_list_17_mod(Ptr_nodo Tree, int k){
-    char word[NEWGAMEBUFFER];
-    Ptr_nodo z;
+// Funzione per leggere un numero intero
+int readInt() {
+    int num = 0;
+    char ch;
 
+    // Ignora gli spazi e i caratteri di fine riga iniziali
+    while ((ch = getc_unlocked(stdin)) != EOF && (ch == ' ' || ch == '\n')){}
 
-
-    if(scanf("%[^\n]%*c", word)==0){
-        return NULL;
+    // Leggi e costruisci l'intero
+    while (ch <= '9' && ch >= '0') {
+        num = num * 10 + (ch - '0');
+        ch = getc_unlocked(stdin);
     }
 
-    do{
-        z=malloc(sizeof(nodo_t));
-        if(z!=NULL){
-            z->word=malloc(sizeof(char)*NEWGAMEBUFFER);
-            strcpy(z->word, word);
-            z->valid=1;
-            z->father=NULL;
-            z->left=NULL;
-            z->right=NULL;
-
-        }
-        Tree=BST_Insert(Tree, z);
-
-        if(scanf("%[^\n]%*c", word)==0){
-            return NULL;
-        }
-    }while(word[0]!='+');
-
-
-    return Tree;
+    return num;
 }
 
-void free_all(Ptr_nodo x){
-    if(x!=NULL){
-        free_all(x->left);
-        free_all(x->right);
-        free(x);
+int binarySearch(Station array[], int dimension, int value){  // O[log(n)]
+    int p, u, m;
+    p = 0;
+    u = dimension - 1;
+    if(dimension == 0) return -1;
+    if(value < array[p].distance || value > array[u].distance ) return -1;
+    while(p <= u) {
+        m = (p + u) / 2;
+        if(array[m].distance == value)
+            return m; // valore x trovato alla posizione m
+        if(array[m].distance < value)
+            p = m + 1;
+        else
+            u = m - 1;
     }
+    return -1;
 }
 
-void Inorder_Tree_Walk(Ptr_nodo x){
-    if(x!=NULL){
-        Inorder_Tree_Walk(x->left);
-        printf("%s\n", x->word);
-        Inorder_Tree_Walk(x->right);
-    }
-}
-
-void Inorder_Tree_Walk_free_word(Ptr_nodo x){
-    if(x!=NULL){
-        Inorder_Tree_Walk_free_word(x->left);
-        free(x->word);
-        Inorder_Tree_Walk_free_word(x->right);
-    }
-}
-
-Ptr_nodo setup_list_14(Ptr_nodo Tree, int k){
-    char *word;
-    Ptr_nodo z;
-
-
-    word=malloc(sizeof(char)*(k+1));
-    if(scanf("%[^\n]%*c", word)==0){
-        return NULL;
-    }
-
-    while(word[0]!='+'){
-        z=malloc(sizeof(nodo_t));
-        if(z!=NULL){
-            z->word=malloc(sizeof(char)*(k+1));
-            if(z->word!=NULL){
-                strcpy(z->word, word);
-                z->valid=1;
-                z->father=NULL;
-                z->left=NULL;
-                z->right=NULL;
-
-            }
-        }
-        Tree=BST_Insert(Tree, z);
-        if(scanf("%[^\n]%*c", word)==0){
-            return NULL;
+int carSearch(int array[], int dimension, int value){  // O[log(n)]
+    for(int i=0; i<dimension; i++){
+        if(array[i] == value){
+            return i;
         }
     }
 
-    free(word);
-
-    return Tree;
+    return -1;
 }
 
-Ptr_nodo setup_list(Ptr_nodo Tree, int k){ /* va modificata come setup_list_14*/
-    char word1[NEWGAMEBUFFER];
-    Ptr_nodo z=NULL;
+int binarySearchModMaxMinor(Station array[], int dimension, int value){
+    int left = 0;
+    int right = dimension - 1;
+    int result = -1;
 
-
-
-    if(scanf("%[^\n]%*c", word1)==0){
-        return NULL;
-    }
-
-
-    while(word1[0]!='+'){
-        z=malloc(sizeof(nodo_t));
-        if(z!=NULL){
-            z->word=malloc(sizeof(char)*(NEWGAMEBUFFER));
-            if(z->word!=NULL){
-                strcpy(z->word, word1);
-                z->valid=1;
-                z->father=NULL;
-                z->left=NULL;
-                z->right=NULL;
-
-            }
-        }
-        Tree=BST_Insert(Tree, z);
-
-        if(scanf("%[^\n]%*c", word1)==0){
-            return NULL;
+    while(left <= right){
+        int middle = (left + right) / 2;
+        if(array[middle].distance < value){
+            result = middle;
+            left = middle + 1;
+        }else{
+            right = middle - 1;
         }
     }
 
-    return Tree;
+    return result;
 }
 
-void Inorder_Tree_Walk_mod(Ptr_nodo x){
-    if(x!=NULL){
-        Inorder_Tree_Walk_mod(x->left);
-        if(x->valid==1){
-            printf("%s\n", x->word);
+int binarySearchModMinMajor(Station array[], int dimension, int startingIndex, int value){
+    int left = startingIndex + 1;
+    int right = dimension + startingIndex;
+    int result = -1;
+
+    while (left <= right){
+        int middle = (left + right) / 2;
+        if(array[middle].distance > value){
+            result = middle;
+            right = middle - 1;
+        }else{
+            left = middle + 1;
         }
-        Inorder_Tree_Walk_mod(x->right);
     }
+
+    return result;
 }
 
-int ricerca_cella(char x){
-    int i;
+void aggiungiAuto(Road road, int stationDist, int carAutonomy){  // O[log(n)]
+    // ricerca stazione nella lista
+    // eventuale modifica di found
+    int found = binarySearch(road.stationList, road.stationCounter, stationDist);  // O[log(n)]
 
-    if(x==45){
-        i=0;
-    }else if(47<x && x<58){
-        i=x%47;
-    }else if(64<x && x<91){
-        i=x%=54;
-    }else if(x==95){
-        i=37;
+    if(found != -1){
+        //puntatore viene collegato alla station corretta, modifica l'array di macchine e il flag "modified"
+        if(road.stationList[found].maxAutonomy < carAutonomy){
+            road.stationList[found].maxAutonomy = carAutonomy ;
+            /*road.stationList[found].stationModified = 1;*/
+            road.isStationModified = 1;
+        }
+        road.stationList[found].carPark[road.stationList[found].actualCars] = carAutonomy;
+        road.stationList[found].actualCars++;
+        printf("aggiunta\n");
     }else{
-        i=x%59;
-    }
-
-    return i;
-}
-
-void fix_valid_words(letter_t criteria[], Ptr_nodo Tree, int len, char *known){
-    int i, j, h, k, use, index, found;
-    Ptr_pos_list tmp;
-
-    if(Tree->valid==1){
-        for(h=0;h<64;h++){
-            if(criteria[h].belong==2){
-                use=0;
-                for(k=0;k<len;k++){
-                    if(h==0){
-                        if(Tree->word[k]==45){
-                            use++;
-                        }
-                    }else if(1<=h && h<=10){
-                        if(Tree->word[k]==47+h){
-                            use++;
-                        }
-                    }else if(11<=h && h<=36){
-                        if(Tree->word[k]==54+h){
-                            use++;
-                        }
-                    }else if(h==37){
-                        if(Tree->word[k]==95){
-                            use++;
-                        }
-                    }else{
-                        if(Tree->word[k]==59+h){
-                            use++;
-                        }
-                    }
-                }
-                if(use==0){
-                    Tree->valid=0;
-                    return;
-                }
-            }
-        }
-        for(i=0;i<len;i++){
-            if(known[i]!='?'){
-                if(Tree->word[i]!=known[i]){
-                    Tree->valid=0;
-                    return;
-                }
-            }
-        }
-        for(i=0;i<len;i++){
-            index=ricerca_cella(Tree->word[i]);
-            if(criteria[index].belong==0){
-                Tree->valid=0;
-                return;
-            }
-            if(criteria[index].ex==1){
-                found=0;
-                for(j=0;j<len;j++){
-                    if(Tree->word[j]==Tree->word[i]){
-                        found++;
-                    }
-                }
-                if(found!=criteria[index].exact){
-                    Tree->valid=0;
-                    return;
-                }
-            }else{
-                found=0;
-                for(j=0;j<len;j++){
-                    if(Tree->word[j]==Tree->word[i]){
-                        found++;
-                    }
-                }
-                if(found<criteria[index].min){
-                    Tree->valid=0;
-                    return;
-                }
-            }
-            for(tmp=criteria[index].valid_pos;tmp!=NULL && tmp->position<=i;tmp=tmp->next){
-                if(Tree->word[tmp->position]!=Tree->word[i]){
-                    Tree->valid=0;
-                    return;
-                }
-            }
-            for(tmp=criteria[index].invalid_pos;tmp!=NULL && tmp->position<=i;tmp=tmp->next){
-                if(tmp->position==i){
-                    Tree->valid=0;
-                    return;
-                }
-            }
-        }
-
-    }
-
-    return;
-
-}
-
-void Inorder_Tree_Walk_crit(Ptr_nodo x, letter_t criteria[], int k, char *known){
-
-    if(x!=NULL){
-        Inorder_Tree_Walk_crit(x->left, criteria, k, known);
-        fix_valid_words(criteria, x, k, known);
-        Inorder_Tree_Walk_crit(x->right, criteria, k, known);
+        printf("non aggiunta\n");
     }
 }
 
-void fix_criteria(char *result, letter_t criteria[], char *word, int len, char *known){
-    int i, j, index, test, minor, bar;
-    Ptr_pos_list tmp, prec, sup;
+void rottamaAuto(Road road, int stationDist, int carAutonomy){  // O[log(n)]
+    // ricerca stazione nella lista
+    // eventuale modifica di found
+    int found = binarySearch(road.stationList, road.stationCounter, stationDist);   // O[log(n)]
 
-
-
-    for(i=0;i<len;i++){
-        index=ricerca_cella(word[i]);
-        if(criteria[index].belong!=0){
-            test=0;
-            minor=0;
-            bar=0;
-            for(j=0;j<len;j++){
-                if(word[j]==word[i] && result[j]!='/'){
-                    minor++;
+    if(found != -1) {
+        //puntatore viene collegato alla station corretta, modifica l'array di macchine e il flag "modified"
+        int foundCar = carSearch(road.stationList[found].carPark, road.stationList[found].actualCars, carAutonomy);  // O[log(n)]
+        if (foundCar != -1) {
+            if (road.stationList[found].carPark[foundCar] == road.stationList[found].maxAutonomy) {
+                int max = 0;
+                for (int i = 0; i < CARPARKSIZE && i != foundCar; i++) {  // O(512) costante
+                    if (road.stationList[found].carPark[i] > max)
+                        max = road.stationList[found].carPark[i];
                 }
-                if(word[j]==word[i] && result[j]!='/'){
-                    test=1;
+                if (max < road.stationList[found].carPark[foundCar]) {
+                    road.stationList[found].maxAutonomy = max;
+                    /*road.stationList[found].stationModified = 1;*/
+                    road.isStationModified = 1;
                 }
-                if(word[j]==word[i] && result[j]=='/'){
-                    bar=1;
+                road.stationList[found].carPark[foundCar] = road.stationList[found].carPark[road.stationList[found].actualCars - 1];
+                road.stationList[found].carPark[road.stationList[found].actualCars - 1] = 0;
+                road.stationList[found].actualCars--;
+                printf("rottamata\n");
+            } else {
+                road.stationList[found].carPark[foundCar] = road.stationList[found].carPark[road.stationList[found].actualCars - 1];
+                road.stationList[found].carPark[road.stationList[found].actualCars - 1] = 0;
+                road.stationList[found].actualCars--;
+                printf("rottamata\n");
+            }
+        } else {
+            printf("non rottamata\n");
+        }
+    }else{
+        printf("non rottamata\n");
+    }
+}
+
+/*
+void updateAdjLists(Road road, NodesPool pool, int updateCase){  // O[n^2*log(n)]
+    if(updateCase == 1){
+        for(int i=0;i<road.stationCounter;i++) {  // O(n) ciclo sulle stazioni per aggiornarle una a una
+            int kmMin;
+            int kmMax = road.stationList[i].distance + road.stationList[i].maxAutonomy;
+            if (road.stationList[i].distance - road.stationList[i].maxAutonomy >= 0) {
+                kmMin = road.stationList[i].distance - road.stationList[i].maxAutonomy;
+            } else {
+                kmMin = 0;
+            }
+
+            //remove delle stazioni nei due alberi
+            if (i > 0) {
+
+                for (int j = binarySearchModMaxMinor(road.stationList, i, kmMin); j >= 0; j--) {    // O(n)
+                    if (searchNode(road.stationList[i].adjListHeadBackwards, road.stationList[j].distance) != 0) { // O[log(n)]
+                        // rimuovo la stazione all'albero binario rosso-nero
+                        AdjListNode* node = removeNodeRedBlackTree(road.stationList[i].adjListHeadBackwards, road.stationList[j].distance);  // O[log(n)]
+                        nodeRemoval(pool, node);  // O(n)
+                        road.stationList[i].adjListBackwardsCounter++;
+                    }
                 }
             }
-            if(test!=0){
-                criteria[index].belong=2;
-                if(result[i]=='+'){
-                    known[i]=word[i];
-                    tmp=malloc(sizeof(pos_list_t));
-                    if(tmp!=NULL){
-                        tmp->position=i;
-                        tmp->next=NULL;
-                        if(criteria[index].valid_pos==NULL){
-                            criteria[index].valid_pos=tmp;
-                        }else{
-                            prec=criteria[index].valid_pos;
-                            while(((prec->position)<(tmp->position))&& prec->next!=NULL){
-                                prec=prec->next;
-                            }
-                            if(prec->next==NULL){
-                                prec->next=tmp;
-                            }else{
-                                sup=prec;
-                                prec=tmp;
-                                tmp->next=sup;
-                            }
-                        }
+            if (i < road.stationCounter - 1) {
+                for (int k = binarySearchModMinMajor(road.stationList, road.stationCounter-1-i, i, kmMax) ; k <= road.stationCounter - 1; k++) {    // O(n)
+                    int index = searchNode(road.stationList[i].adjListHeadForwards, road.stationList[k].distance);  // O[log(n)]
+                    if (index >= 0) {
+                        // rimuovo la stazione all'albero binario rosso-nero
+                        AdjListNode* node = removeNodeRedBlackTree(road.stationList[i].adjListHeadForwards, road.stationList[k].distance);  // O[log(n)]
+                        nodeRemoval(pool, node);  // O(n)
+                        road.stationList[i].adjListForwardsCounter++;
                     }
-                    /*
-                    for(h=0;h<64;h++){
-                        if(h!=index){
-                            if(criteria[h].belong!=0){
-                                criteria[h].invalid_pos=Insert(criteria[h].invalid_pos, i);
-                            }
+                }
+
+            }
+
+            //ricerca ed eventuale aggiunta delle stazioni da aggiungere nei due alberi
+            if (i > 0) {
+                for (int j = i - 1; road.stationList[j].distance >= kmMin && j >= 0; j--) {     // O(n)
+                    if (searchNode(road.stationList[i].adjListHeadBackwards, road.stationList[j].distance) == -1) {      // O[log(n)]
+                        // aggiungo la stazione all'albero binario rosso-nero
+                        if(road.stationList[i].adjListBackwardsCounter == road.stationList[i].adjListBackwardsDim-1){
+                            road.stationList[i].adjListBackwardsDim *= 2;
+                            road.stationList[i].adjListHeadBackwards = realloc(road.stationList[i].adjListHeadBackwards, road.stationList[i].adjListBackwardsDim * sizeof(AdjListNode));
                         }
+                        insertNodeRedBlackTree(road.stationList[i].adjListHeadBackwards, newNode(road.stationList[j].distance, pool)); // O[log(n)]
+                        road.stationList[i].adjListBackwardsCounter++;
                     }
-                    */
-                }else if(result[i]=='|'){
-                    tmp=malloc(sizeof(pos_list_t));
-                    if(tmp!=NULL){
-                        tmp->position=i;
-                        tmp->next=NULL;
-                        if(criteria[index].invalid_pos==NULL){
-                            criteria[index].invalid_pos=tmp;
-                        }else{
-                            prec=criteria[index].invalid_pos;
-                            while(((prec->position)<(tmp->position))&& prec->next!=NULL){
-                                prec=prec->next;
-                            }
-                            if(prec->next==NULL){
-                                prec->next=tmp;
-                            }else{
-                                sup=prec;
-                                prec=tmp;
-                                tmp->next=sup;
-                            }
+                }
+            }
+            if (i < road.stationCounter - 1) {
+                for (int k = i + 1; road.stationList[k].distance <= kmMax && k <= road.stationCounter - 1; k++) {       // O(n)
+                    if (searchNode(road.stationList[i].adjListHeadForwards, road.stationList[k].distance) == -1) {       // O[log(n)]
+                        // aggiungo la stazione all'albero binario rosso-nero
+                        if(road.stationList[i].adjListForwardsCounter == road.stationList[i].adjListForwardsDim-1){
+                            road.stationList[i].adjListForwardsDim *= 2;
+                            road.stationList[i].adjListHeadForwards = realloc(road.stationList[i].adjListHeadForwards, road.stationList[i].adjListForwardsDim * sizeof(AdjListNode));
+                        }
+                        insertNodeRedBlackTree(road.stationList[i].adjListHeadForwards, newNode(road.stationList[k].distance, pool));  // O[log(n)]
+                        road.stationList[i].adjListForwardsCounter++;
+                    }
+                }
+
+            }
+        }
+    }else if(updateCase == 2) {
+        for (int i = 0; i < road.stationCounter; i++) { // O(n) ciclo sulle stazioni per aggiornarle una a una
+            if (road.stationList[i].stationModified == 1) {
+                int kmMin;
+                int kmMax = road.stationList[i].distance + road.stationList[i].maxAutonomy;
+                if (road.stationList[i].distance - road.stationList[i].maxAutonomy >= 0) {
+                    kmMin = road.stationList[i].distance - road.stationList[i].maxAutonomy;
+                } else {
+                    kmMin = 0;
+                }
+
+                //remove delle stazioni nei due alberi
+                if (i > 0) {
+
+                    for (int j = binarySearchModMaxMinor(road.stationList, i, kmMin); j >= 0; j--) {        // O(n)
+                        int index = searchNode(road.stationList[i].adjListHeadBackwards, road.stationList[j].distance);     // O[log(n)]
+                        if (index >= 0) {
+                            // rimuovo la stazione all'albero binario rosso-nero
+                            AdjListNode* node = removeNodeRedBlackTree(road.stationList[i].adjListHeadBackwards, road.stationList[j].distance);  // O[log(n)]
+                            nodeRemoval(pool, node);  // O(n)
+                            road.stationList[i].adjListBackwardsCounter++;
                         }
                     }
                 }
-                if(bar==0){
-                    if(minor>criteria[index].min){
-                        criteria[index].min=minor;
+                if (i < road.stationCounter - 1) {
+
+                    for (int k = binarySearchModMinMajor(road.stationList, road.stationCounter - 1 - i, i, kmMax);
+                         k <= road.stationCounter - 1; k++) {       // O(n)
+                        int index = searchNode(road.stationList[i].adjListHeadForwards, road.stationList[k].distance); // O[log(n)]
+                        if (index >= 0) {
+                            // rimuovo la stazione all'albero binario rosso-nero
+                            AdjListNode* node = removeNodeRedBlackTree(road.stationList[i].adjListHeadForwards, road.stationList[k].distance);  // O[log(n)]
+                            nodeRemoval(pool, node);  // O(n)
+                            road.stationList[i].adjListForwardsCounter++;
+                        }
                     }
+
+                }
+
+                //ricerca ed eventuale aggiunta delle stazioni da aggiungere nei due alberi
+                if (i > 0) {
+                    for (int j = i - 1; road.stationList[j].distance >= kmMin && j >= 0; j--) {     // O(n)
+                        if (searchNode(road.stationList[i].adjListHeadBackwards, road.stationList[j].distance) == -1) {      // O[log(n)]
+                            // aggiungo la stazione all'albero binario rosso-nero
+                            if(road.stationList[i].adjListBackwardsCounter == road.stationList[i].adjListBackwardsDim-1){
+                                road.stationList[i].adjListBackwardsDim *= 2;
+                                road.stationList[i].adjListHeadBackwards = realloc(road.stationList[i].adjListHeadBackwards, road.stationList[i].adjListBackwardsDim * sizeof(struct node*));
+                            }
+                            insertNodeRedBlackTree(road.stationList[i].adjListHeadBackwards, newNode(road.stationList[j].distance, pool));  // O[log(n)]
+                            road.stationList[i].adjListBackwardsCounter++;
+                        }
+                    }
+                }
+                if (i < road.stationCounter - 1) {
+                    for (int k = i + 1; road.stationList[k].distance <= kmMax && k <= road.stationCounter - 1; k++) {   // O(n)
+                        if (searchNode(road.stationList[i].adjListHeadForwards, road.stationList[k].distance) == -1) {       // O[log(n)]
+                            // aggiungo la stazione all'albero binario rosso-nero
+                            if(road.stationList[i].adjListForwardsCounter == road.stationList[i].adjListForwardsDim-1){
+                                road.stationList[i].adjListForwardsDim *= 2;
+                                road.stationList[i].adjListHeadForwards = realloc(road.stationList[i].adjListHeadForwards, road.stationList[i].adjListForwardsDim*sizeof(AdjListNode));
+                            }
+                            insertNodeRedBlackTree(road.stationList[i].adjListHeadForwards, newNode(road.stationList[k].distance, pool));  // O[log(n)]
+                            road.stationList[i].adjListForwardsCounter++;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+*/
+
+void shortestPathForward(Station* stationList, int stationCounter, int station1Dist, int station2Dist, MarkerArray* markerArray, int startingIndex){
+    //TODO
+    int markerIndex = 0;
+    int foundIndex = 0;
+
+    for(int i=startingIndex;stationList[i].distance<station2Dist && i<stationCounter;i++){
+        foundIndex = i;
+        if(stationList[i].distance<markerArray[markerIndex].distance || markerArray[markerIndex].distance == -1){
+            int maxKm = stationList[i].distance + stationList[i].maxAutonomy;
+            if(maxKm>markerArray[markerIndex].distance){
+                if(markerArray[markerIndex].distance == -1) {
+                    markerArray[markerIndex].distance = maxKm;
+                    markerArray[markerIndex].steps = 1;
+                    markerArray[markerIndex].predecessor = stationList[i].distance;
                 }else{
-                    criteria[index].exact=minor;
-                    criteria[index].ex=1;
+                    markerIndex++;
+                    markerArray[markerIndex].distance = maxKm;
+                    markerArray[markerIndex].steps = markerArray[markerIndex-1].steps+1;
+                    markerArray[markerIndex].predecessor = stationList[i].distance;
                 }
             }
-            else{
-                criteria[index].belong=0;
-
+        }else if(stationList[i].distance == markerArray[markerIndex].distance){
+            int maxKm = stationList[i].distance + stationList[i].maxAutonomy;
+            if(maxKm>markerArray[markerIndex].distance){
+                markerIndex++;
+                markerArray[markerIndex].distance = maxKm;
+                markerArray[markerIndex].steps = markerArray[markerIndex-1].steps+1;
+                markerArray[markerIndex].predecessor = stationList[i].distance;
             }
         }
     }
-}
 
-void compare(char *target, char *word, char *result, int k){
+    for(int j=0; j<=markerIndex; j++){
+        if(markerArray[j].distance>=station2Dist){
+            int* predecessorArray = malloc((markerArray[j].steps+1)*sizeof(int));
+            predecessorArray[markerArray[j].steps] = station2Dist;
+            int actualPredecessor = markerArray[j].predecessor;
+            int searchIndex = markerArray[j].steps-1;
 
-/*	idea più semplice: copia di target e word, primo controllo segno i '+' poi segno le '|' modificando le stringhe */
+            if(markerIndex == 0){
+                predecessorArray[0] = station1Dist;
+            }else { //sistemare
+                for (int k = j - 1; k >= 0 && searchIndex >= 0; k--) {
+                    if (markerArray[k].distance > actualPredecessor) {
+                        predecessorArray[searchIndex] = actualPredecessor;
+                        searchIndex--;
+                        actualPredecessor = markerArray[k].predecessor;
+                    }
+                }
+                predecessorArray[0] = station1Dist;
+            }
 
-    char *t_copy, *w_copy;
-    int i, j, found;
-
-    for(i=0;i<k;i++){
-        result[i]='/';
-    }
-
-    t_copy=malloc(sizeof(char)*(k+1));
-    w_copy=malloc(sizeof(char)*(k+1));
-
-    strcpy(t_copy, target);
-    strcpy(w_copy, word);
-
-    for(i=0;i<k;i++){
-        if(t_copy[i]==w_copy[i]){
-            result[i]='+';
-            t_copy[i]='?';
-            w_copy[i]='?';
+            //stampa
+            for(int l=0; l<=markerArray[j].steps; l++){
+                printf("%d ", predecessorArray[l]);
+            }
+            printf("\n");
+            return;
         }
     }
 
-    for(i=0;i<k;i++){
-        if(result[i]!='+'){
-            found=0;
-            for(j=0;j<k && found==0;j++){
-                if(t_copy[j]==w_copy[i]){
-                    found=1;
-                    result[i]='|';
-                    t_copy[j]='?';
-                    w_copy[i]='?';
+    printf("nessun percorso\n");
+}
+
+void shortestPathBackward(Station* stationList, int stationCounter, int station1Dist, int station2Dist, MarkerArray* markerArray, int startingIndex){
+    //TODO
+    int markerIndex = 0;
+    int foundIndex = 0;
+
+    for(int i=startingIndex; stationList[i].distance>station2Dist && i>=0;i--){
+        foundIndex = i;
+        if(stationList[i].distance>markerArray[markerIndex].distance || markerArray[markerIndex].distance == INT_MAX){
+            int minKm = stationList[i].distance - stationList[i].maxAutonomy;
+            if(minKm<0){
+                minKm=0;
+            }
+            if(minKm<markerArray[markerIndex].distance){
+                if(markerArray[markerIndex].distance == INT_MAX) {
+                    markerArray[markerIndex].distance = minKm;
+                    markerArray[markerIndex].steps = 1;
+                    markerArray[markerIndex].predecessor = stationList[i].distance;
+                }else{
+                    markerIndex++;
+                    markerArray[markerIndex].distance = minKm;
+                    markerArray[markerIndex].steps = markerArray[markerIndex-1].steps+1;
+                    markerArray[markerIndex].predecessor = stationList[i].distance;
                 }
             }
+        }else if(stationList[i].distance == markerArray[markerIndex].distance){
+            int minKm = stationList[i].distance - stationList[i].maxAutonomy;
+            if(minKm<markerArray[markerIndex].distance){
+                markerIndex++;
+                markerArray[markerIndex].distance = minKm;
+                markerArray[markerIndex].steps = markerArray[markerIndex-1].steps+1;
+                markerArray[markerIndex].predecessor = stationList[i].distance;
+            }
         }
     }
 
-    free(t_copy);
-    free(w_copy);
+    for(int j=0; j<=markerIndex; j++){
+        if(markerArray[j].distance<=station2Dist){
+            int* predecessorArray = malloc((markerArray[j].steps+1)*sizeof(int));
+            predecessorArray[markerArray[j].steps] = station2Dist;
+            int actualPredecessor = markerArray[j].predecessor;
+            int searchIndex = markerArray[j].steps-1;
+
+            if(markerIndex == 0) {
+                predecessorArray[0] = station1Dist;
+            }else {
+                for (int k = j - 1; k >= 0 && searchIndex >= 0; k--) {
+                    if (markerArray[k].distance < actualPredecessor) {
+                        predecessorArray[searchIndex] = actualPredecessor;
+                        searchIndex--;
+                        actualPredecessor = markerArray[k].predecessor;
+                    }
+                }
+                predecessorArray[0] = station1Dist;
+            }
+
+            //stampa
+            for(int l=0; l<=markerArray[j].steps; l++){
+                printf("%d ", predecessorArray[l]);
+            }
+            printf("\n");
+            return;
+        }
+    }
+
+    printf("nessun percorso\n");
 }
 
-void remaining(Ptr_nodo Tree, int *i){
-    if(Tree!=NULL){
-        remaining(Tree->left, i);
-        if(Tree->valid==1){
-            (*i)=(*i)+1;
+void pianificaPercorso(Road road, /*NodesPool pool,*/ int station1Dist, int station2Dist){
+    /*
+     * if(road.roadModified==1){
+        updateAdjLists(road, pool, 1);
+    }else if(road.roadModified==0) {
+        if (road.isStationModified == 1) {
+            updateAdjLists(road, pool, 2);
         }
-        remaining(Tree->right, i);
     }
+     */
+
+    //calcolo effettivo percorso
+    if(station1Dist == station2Dist) {
+        printf("%d\n", station1Dist);
+    }else if(station1Dist<station2Dist) {
+        //uso liste forwards
+        MarkerArray* markerArray = malloc(road.stationCounter * sizeof (MarkerArray));
+        int helper;
+        for(int i=0; i<road.stationCounter; i++) {
+            if (road.stationList[i].distance == station1Dist) {
+                markerArray[i].distance = -1;
+                helper = i;
+            } else {
+                markerArray[i].distance = -1;
+            }
+        }
+        shortestPathForward(road.stationList, road.stationCounter, station1Dist, station2Dist, markerArray, helper);
+    }else if(station1Dist>station2Dist) {
+        //uso liste backwards
+        MarkerArray* markerArray = malloc(road.stationCounter * sizeof (MarkerArray));
+        int helper = 0;
+        for(int i=0; i<road.stationCounter; i++) {
+            if (road.stationList[i].distance == station1Dist) {
+                markerArray[i].distance = INT_MAX;
+                helper = i;
+            } else {
+                markerArray[i].distance = INT_MAX;
+            }
+        }
+        shortestPathBackward(road.stationList, road.stationCounter, station1Dist, station2Dist, markerArray, helper);
+    }
+
 }
 
-int confronta_parole(char *target, char *word, Ptr_nodo Tree, letter_t criteria[], char *known){
-    char *result;
-    int alt, i, k;
-    int	*j;
+int aggiungiStazione(Road road, int stationDist, int carNumb, int carSpecs[]){  // O(n)
+    // ricerca stazione nella lista
+    // eventuale modifica di found
+    int found = binarySearch(road.stationList, road.stationCounter, stationDist); // O[log(n)]
 
-    k=strlen(word);
-    result=malloc(sizeof(char)*(k+1));
+    //aggiunta stazione e parco auto
+    if(found != -1){
+        printf("non aggiunta\n");
+        return 0;
+    } else{
+        //inserimento nella struttura e aggiornamento adjacency lists
+        if(road.stationCounter == 0){
+            road.stationList[road.stationCounter].distance = stationDist;
+            road.stationList[road.stationCounter].actualCars = carNumb;
+            int max = 0;
+            for(int i=0; i<CARPARKSIZE; i++) {              // O(512) costante
+                if(i<carNumb){
+                    road.stationList[road.stationCounter].carPark[i] = carSpecs[i];
+                    if(road.stationList[road.stationCounter].carPark[i] > max)
+                        max = road.stationList[road.stationCounter].carPark[i];
+                }else{
+                    road.stationList[road.stationCounter].carPark[i] = 0;
+                }
+            }
+            road.stationList[road.stationCounter].maxAutonomy = max;
 
+            /*
+             * road.stationList[road.stationCounter].adjListHeadBackwards = (AdjListNode*) malloc(100 * sizeof (AdjListNode));
+             * road.stationList[road.stationCounter].adjListHeadForwards = (AdjListNode*) malloc(100 * sizeof (AdjListNode));
+             */
 
-    compare(target, word, result, k);
+        }else {
+            road.stationList[road.stationCounter].distance = stationDist;
+            road.stationList[road.stationCounter].actualCars = carNumb;
+            int max = 0;
+            for(int i=0; i<CARPARKSIZE; i++) {              // O(512) costante
+                if(i<carNumb){
+                    road.stationList[road.stationCounter].carPark[i] = carSpecs[i];
+                    if(road.stationList[road.stationCounter].carPark[i] > max)
+                        max = road.stationList[road.stationCounter].carPark[i];
+                }else{
+                    road.stationList[road.stationCounter].carPark[i] = 0;
+                }
+            }
+            road.stationList[road.stationCounter].maxAutonomy = max;
 
-    alt=0;
-    for(i=0;i<k;i++){
-        if(result[i]!='+'){
-            alt=1;
+            /*
+             * road.stationList[road.stationCounter].adjListForwardsDim = 100;
+             * road.stationList[road.stationCounter].adjListBackwardsDim = 100;
+             * road.stationList[road.stationCounter].adjListHeadBackwards = (AdjListNode*) malloc(road.stationList[road.stationCounter].adjListBackwardsDim * sizeof (AdjListNode));
+             * road.stationList[road.stationCounter].adjListHeadForwards = (AdjListNode*) malloc(road.stationList[road.stationCounter].adjListForwardsDim * sizeof (AdjListNode));
+             */
+
+            bubbleSort(road.stationList, road.stationCounter+1);  // O(n)
         }
-    }
 
-    if(alt==0){
-        free(result);
+        road.roadModified = 1;
+
+        if(road.stationCounter+1==(road.roadDim-1)){
+            road.roadDim = road.roadDim * 2;
+            road.stationList = (Station*) realloc(road.stationList, road.roadDim*sizeof(Station));
+            if(road.stationList == NULL){
+                printf("Errore allocazione memoria.\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+        fprintf(stdout, "aggiunta\n");
         return 1;
     }
+}
 
-    for(i=0;i<k;i++){
-        printf("%c", result[i]);
+int demolisciStazione(Road road, int stationDist){  // O(n)
+    // ricerca stazione nella lista
+    // eventuale modifica di found
+    int found = binarySearch(road.stationList, road.stationCounter, stationDist); // O[log(n)]
+
+    //rimozione stazione
+    if(found != -1){
+        /*
+        free(road.stationList[found].adjListHeadForwards);
+        free(road.stationList[found].adjListHeadBackwards);
+         */
+
+        for(int i = found; i<road.stationCounter-1; i++){  // O(n)
+            road.stationList[i] = road.stationList[i+1];
+        }
+
+        road.roadModified = 1;
+
+        printf("demolita\n");
+        return 1;
+    } else{
+        printf("non demolita\n");
+        return 0;
+    }
+}
+
+/*
+int main() {
+    int distance, carNumber, autonomy;
+
+    Road road;
+    road.roadModified = 0;
+    road.roadDim = 100;
+    road.stationCounter = 0;
+
+    road.stationList = (Station*) malloc(road.roadDim * sizeof (Station));
+    if(road.stationList == NULL){
+        printf("Errore allocazione memoria.\n");
+        exit(EXIT_FAILURE);
     }
 
-    fix_criteria(result, criteria, word, k, known);
-    Inorder_Tree_Walk_crit(Tree, criteria, k, known);
+    NodesPool nodesPool;
+    nodesPool.nextAvailableIndex = 0;
+    nodesPool.poolDim = 100;
 
-    j=malloc(sizeof(int));
-    if(j!=NULL){
-        *j=0;
-        remaining(Tree, j);
-        printf("\n");
-        printf("%d\n", *j);
+    nodesPool.nodes = (AdjListNode*) malloc(nodesPool.poolDim * sizeof(AdjListNode));
+    if(nodesPool.nodes == NULL){
+        printf("Errore allocazione memoria.\n");
+        exit(EXIT_FAILURE);
+    }
+    for(int i=0;i<nodesPool.poolDim;i++){
+        nodesPool.nodes[i].inUse = 0;
     }
 
-    free(j);
-    free(result);
+
+    char* command = malloc(20 * sizeof(char));
+    while ((command = readWord(command)) != NULL) {
+        // Analizza il comando
+        if (strcmp(command, "aggiungi-stazione") == 0) {
+            distance = readInt();
+            carNumber = readInt();
+            int* autonomies = malloc(carNumber * sizeof(int));
+            for (int i = 0; i < carNumber; i++) {
+                autonomies[i] = readInt();
+            }
+            aggiungiStazione(road, distance, carNumber, autonomies);
+        } else if (strcmp(command, "demolisci-stazione") == 0) {
+            distance = readInt();
+            demolisciStazione(road, distance);
+        } else if (strcmp(command, "pianifica-percorso") == 0) {
+            int startStation = readInt();
+            int endStation = readInt();
+            pianificaPercorso(road, nodesPool, startStation, endStation);
+        } else if (strcmp(command, "aggiungi-auto") == 0) {
+            distance = readInt();
+            autonomy = readInt();
+            aggiungiAuto(road, distance, autonomy);
+        } else if (strcmp(command, "rottama-auto") == 0) {
+            distance = readInt();
+            autonomy = readInt();
+            rottamaAuto(road, distance, autonomy);
+        }
+    }
+
+    free(road.stationList);
 
     return 0;
 }
-
-int is_valid(char *word, Ptr_nodo Tree){
-    if(Tree==NULL){
-        return 0;
-    }
-    if(strcmp(word, Tree->word)<0){
-        return is_valid(word, Tree->left);
-    }else if(strcmp(word, Tree->word)>0){
-        return is_valid(word, Tree->right);
-    }
-
-    return 1;
-}
-
-void new_game(int k, Ptr_nodo valid_words){
-    char *target, *word, *known;
-    int i, n, win, val;
-    letter_t criteria[64];
+*/
 
 
-    target=malloc(sizeof(char)*(k+1));
-    if(target!=NULL){
+int main() {
+    int distance, carNumber, autonomy, startStation, endStation;
+    int autonomies[512];
 
-        if(scanf("%[^\n]%*c", target)==0){
-            return;
-        }
+    Road road;
+    road.roadModified = 0;
+    road.roadDim = 100;
+    road.stationCounter = 0;
+
+    road.stationList = (Station*) malloc(road.roadDim * sizeof (Station));
+    if(road.stationList == NULL){
+        printf("Errore allocazione memoria.\n");
+        exit(EXIT_FAILURE);
     }
 
+    /*
+    NodesPool nodesPool;
+    nodesPool.nextAvailableIndex = 0;
+    nodesPool.poolDim = 100;
 
-    if(scanf("%d%*c", &n)==0){
-        return;
+    nodesPool.nodes = (AdjListNode*) malloc(nodesPool.poolDim * sizeof(AdjListNode));
+    if(nodesPool.nodes == NULL){
+        printf("Errore allocazione memoria.\n");
+        exit(EXIT_FAILURE);
     }
-
-    for(i=0;i<64;i++){
-        criteria[i].belong=1;
-        criteria[i].min=0;
-        criteria[i].ex=0;
-        criteria[i].valid_pos=NULL;
-        criteria[i].invalid_pos=NULL;
+    for(int i=0;i<nodesPool.poolDim;i++){
+        nodesPool.nodes[i].inUse = 0;
     }
-
-    win=0;
-    known=malloc(sizeof(char)*(k+1));
-    for(i=0;i<k;i++){
-        known[i]='?';
-    }
-
-    while(n>0){
-        if(k<17){
-            word=malloc(sizeof(char)*NEWGAMEBUFFER);
-        }else{
-            word=malloc(sizeof(char)*(k+1));
-        }
-
-        if(scanf("%[^\n]%*c", word)==0){
-            return;
-        }
-        if(word[0]!='+'){
-            val=is_valid(word, valid_words);
-            if(val==0){
-                printf("not_exists\n");
-            }else{
-                win=confronta_parole(target, word, valid_words, criteria, known);
-                if(win==1){
-                    printf("ok\n");
-                    n=0;
-                }else{
-                    n=n-1;
-                }
-            }
-        }else{
-            if(word[1]=='i'){
-                valid_words=setup_list_17_mod(valid_words, k);
-            }else{
-                Inorder_Tree_Walk_mod(valid_words);
-            }
-        }
-        if(k<17){
-            for(i=0;i<NEWGAMEBUFFER;i++){
-                word[i]='e';
-            }
-        }else{
-            for(i=0;i<k;i++){
-                word[i]='e';
-            }
-        }
-        free(word);
-    }
-    if(win!=1){
-        printf("ko\n");
-    }
-
-    for(i=0;i<64;i++){
-        distruggiLista(criteria[i].valid_pos);
-        distruggiLista(criteria[i].invalid_pos);
-    }
-    free(target);
-    free(known);
-}
-
-int main(){
-    int k=0, i;
-    char *start, *word;
-    Ptr_nodo valid_words;
+     */
 
 
+    char* command = malloc(20 * sizeof(char));
+    while (fscanf(stdin, "%s", command) != EOF) {
 
-    if(scanf("%d%*c", &k)==0){
-        return 0;
-    }
-
-    word=malloc(sizeof(char)*(k+1));
-
-    if(scanf("%[^\n]%*c", word)==0){
-        return 0;
-    }
-
-    valid_words=malloc(sizeof(nodo_t));
-    if(valid_words!=NULL){
-        valid_words->word=malloc(sizeof(char)*(k+1));
-        if(valid_words->word!=NULL){
-            strcpy(valid_words->word, word);
-            valid_words->valid=1;
-            valid_words->father=NULL;
-            valid_words->left=NULL;
-            valid_words->right=NULL;
-
-        }
-    }
-
-    if(k>13){								/*se ho parole più corte di 14 caratteri necessito di un array da 15 celle minimo per contenere '+nuova_partita'*/
-        valid_words=setup_list_14(valid_words, k);
-    }else{
-        valid_words=setup_list(valid_words, k);
-    }
-
-
-
-
-    if(k<17){
-        start=malloc(sizeof(char)*NEWGAMEBUFFER);
-        do{
-            free(start);
-            new_game(k, valid_words);
-            Inorder_Tree_Walk_fix(valid_words);
-            start=malloc(sizeof(char)*NEWGAMEBUFFER);
-
-            if(scanf("%[^\n]%*c", start)!=0){
-                if(start[0]=='+' && start[1]=='i'){
-                    valid_words=setup_list_17_mod(valid_words, k);
-
-                    if(scanf("%[^\n]%*c", start)==0){
-                        for(i=0;i<NEWGAMEBUFFER;i++){
-                            start[i]='e';
-                        }
+        // Analizza il comando
+        if (strcmp(command, "aggiungi-stazione") == 0) {
+            if(fscanf(stdin, "%d %d", &distance, &carNumber) != EOF){
+                for (int i = 0; i < carNumber; i++) {
+                    if(fscanf(stdin, "%d", &autonomies[i]) != EOF){
                     }
                 }
-            }else{
-                for(i=0;i<NEWGAMEBUFFER;i++){
-                    start[i]='e';
+                if(aggiungiStazione(road, distance, carNumber, autonomies)) {
+                    road.stationCounter++;
                 }
             }
-        }while(start[0]=='+' && start[1]=='n');
-    }else{
-        start=malloc(sizeof(char)*(k+1));
-        do{
-            free(start);
-            new_game(k, valid_words);
-            Inorder_Tree_Walk_fix(valid_words);
-            start=malloc(sizeof(char)*(k+1));
-
-            if(scanf("%[^\n]%*c", start)!=0){
-                if(start[0]=='+' && start[1]=='i'){
-                    valid_words=setup_list_17_mod(valid_words, k);
-                    if(scanf("%[^\n]%*c", start)==0){
-                        for(i=0;i<k;i++){
-                            start[i]='e';
-                        }
-                    }
-                }
-            }else{
-                for(i=0;i<k;i++){
-                    start[i]='e';
+        } else if (strcmp(command, "demolisci-stazione") == 0) {
+            if(fscanf(stdin, "%d", &distance) != EOF){
+                if(demolisciStazione(road, distance)){
+                    road.stationCounter--;
                 }
             }
-        }while(start[0]=='+' && start[1]=='n');
+        } else if (strcmp(command, "pianifica-percorso") == 0) {
+            if(fscanf(stdin, "%d %d", &startStation, &endStation) != EOF){
+                pianificaPercorso(road, /*nodesPool,*/ startStation, endStation);
+            }
+        } else if (strcmp(command, "aggiungi-auto") == 0) {
+            if(fscanf(stdin, "%d %d", &distance, &autonomy) != EOF){
+                aggiungiAuto(road, distance, autonomy);
+            }
+        } else if (strcmp(command, "rottama-auto") == 0) {
+            if(fscanf(stdin, "%d %d", &distance, &autonomy) != EOF){
+                rottamaAuto(road, distance, autonomy);
+            }
+        }else if(strcmp(command, "fine") == 0){
+            break;
+        }
     }
 
-
-
-    free(word);
-    Inorder_Tree_Walk_free_word(valid_words);
-    free_all(valid_words);
-    free(start);
+    free(road.stationList);
 
     return 0;
 }
